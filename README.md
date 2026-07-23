@@ -1,65 +1,113 @@
 # Sistema de Agendamento de Salas — IFRS Campus Rolante
 
-Sistema web com planta interativa para reserva de salas. Stack: Node.js + Express + MySQL, front em HTML/CSS/JS puro.
+Trabalho de Conclusão de Curso (ADS — IFRS Campus Rolante): sistema web de agendamento de
+salas com **planta 3D interativa** do prédio, onde o usuário navega pelo modelo, clica na
+sala desejada e faz a reserva direto pela interface.
 
-## Como rodar (passo a passo)
+**Stack:** Node.js + Express (backend) · MySQL (banco) · HTML/CSS/JS puro + Three.js (frontend,
+sem build/bundler) · Docker (ambiente pronto pra rodar).
 
-### 1. Pré-requisitos
-- Node.js instalado (versão 18 ou superior)
-- MySQL instalado e rodando
+## Funcionalidades
 
-### 2. Instalar as dependências
-Dentro da pasta do projeto, no terminal:
+- **Login e cadastro** de usuários (senha com hash bcrypt, sessão via `express-session`).
+- **Planta 3D navegável** (Three.js): arraste para girar, role o mouse para zoom.
+- **Bolinhas clicáveis** em cada sala — ao clicar, a câmera "voa" até a porta da sala e abre
+  a janela de agendamento.
+- **Setas de navegação** (▲▼◀▶) ao redor da sala selecionada, para pular pra sala vizinha
+  sem precisar mirar no modelo 3D.
+- **Slider lateral de andar** — arraste a alça (ou clique no trilho) para trocar entre
+  Térreo e Superior; só as salas do andar escolhido ficam visíveis/clicáveis.
+- **Ocupação em tempo real**: a bolinha de cada sala fica vermelha automaticamente durante o
+  horário de uma reserva confirmada e volta pra verde sozinha quando o horário passa.
+- **Grade de horários por data**: escolha uma data no formulário de reserva pra ver os
+  horários já ocupados daquela sala antes de reservar.
+- **Validação de conflito de horário** no backend — não é possível reservar uma sala em cima
+  de um horário já ocupado.
+
+## Como rodar
+
+### Opção 1 — Docker (recomendado)
+
+Só precisa ter o [Docker](https://www.docker.com/) instalado.
+
+```
+docker compose up --build
+```
+
+Isso sobe dois containers: o app Node (porta `3000`) e um MySQL já com o banco criado e
+populado a partir de `sql/schema.sql`. Acesse **http://localhost:3000**.
+
+Para configurar senha do banco, porta etc., copie `.env.example` para `.env` e ajuste — o
+`docker-compose.yml` lê essas variáveis automaticamente.
+
+Se você mudar o `sql/schema.sql` depois de já ter subido o banco uma vez, recrie o volume
+para as mudanças entrarem:
+```
+docker compose down -v
+docker compose up --build
+```
+
+### Opção 2 — Local (sem Docker)
+
+**Pré-requisitos:** Node.js 18+ e MySQL rodando.
+
 ```
 npm install
-```
-
-### 3. Criar o banco de dados
-Abra o MySQL e execute o script:
-```
 mysql -u root -p < sql/schema.sql
-```
-Isso cria o banco `agenda_ifrs`, as tabelas e algumas salas de exemplo.
-
-### 4. Configurar as variáveis de ambiente
-Copie o arquivo de exemplo e preencha com seus dados:
-```
-cp .env.example .env
-```
-Edite o `.env` com a senha do seu MySQL.
-
-### 5. Rodar o servidor
-```
+cp .env.example .env      # edite com a senha do seu MySQL
 npm start
 ```
-Acesse no navegador: http://localhost:3000
+Acesse **http://localhost:3000**.
 
-### 6. Colocar a planta
-Exporte a planta do Sweet Home 3D em SVG (`Plano > Exportar para formato SVG`),
-renomeie para `planta.svg` e coloque dentro da pasta `public/`.
+## Usuário padrão
 
-**Importante:** cada sala no SVG precisa ter um `id` igual ao `svg_id` cadastrado
-na tabela `salas`. Você pode ajustar os ids abrindo o SVG num editor de texto,
-ou ajustar os `svg_id` no banco para bater com os ids que o Sweet Home gerou.
+Já vem cadastrado um usuário administrador para testes:
+
+- **Email:** `jvbb2004@gmail.com`
+- **Senha:** `123`
 
 ## Estrutura do projeto
+
 ```
-config/          conexão com o banco e middlewares de login
-routes/          rotas da API (auth, salas, reservas)
-public/          front-end (html, css, js, e o planta.svg)
-sql/schema.sql   script de criação do banco
-server.js        ponto de entrada
+server.js                   ponto de entrada (Express)
+config/
+  db.js                      conexão com o MySQL (pool com promises)
+  auth-middleware.js         middlewares exigirLogin / exigirAdmin
+routes/
+  auth.js                    cadastro, login, logout, sessão atual
+  salas.js                   listar/criar salas
+  reservas.js                grade de horários, ocupação (por data e em tempo real), criar/cancelar reserva
+sql/
+  schema.sql                 criação das tabelas + dados de exemplo (salas e usuário padrão)
+public/
+  index.html                 telas de login, cadastro, planta 3D e janela de reserva
+  css/estilo.css             tema visual (paleta IFRS)
+  js/app.js                  login, cadastro, reserva, grade de horários
+  js/planta3d.js              cena 3D (Three.js): carregamento do modelo, câmera, navegação, andares
+  modelo3d/                  modelo 3D exportado do Sweet Home 3D (.obj/.mtl + texturas)
+Dockerfile, docker-compose.yml   ambiente Docker (app + MySQL)
 ```
 
-## Primeiro usuário administrador
-Cadastre-se normalmente pela API e depois promova o usuário a admin pelo MySQL:
+## Sobre o modelo 3D
+
+O modelo em `public/modelo3d/` foi exportado do Sweet Home 3D (Arquivo → Exportar para
+formato OBJ). Como o exportador não preserva o nome dado a cada cômodo, a ligação entre cada
+sala do modelo e o registro correspondente no banco é feita manualmente em
+`MAPEAMENTO_MANUAL_SALAS`, dentro de `public/js/planta3d.js`. Se o modelo for reexportado
+(por exemplo, depois de adicionar uma porta ou móvel novo no Sweet Home 3D), os nomes internos
+dos cômodos podem mudar e esse mapeamento precisa ser conferido de novo.
+
+## Primeiro usuário administrador (caso crie um novo banco do zero)
+
+Se você preferir cadastrar seu próprio usuário em vez de usar o padrão, cadastre-se
+normalmente pela tela de cadastro e depois promova a admin pelo MySQL:
 ```sql
 UPDATE usuarios SET tipo = 'admin' WHERE email = 'seu@email.com';
 ```
 
 ## Próximos passos sugeridos (para evoluir o TCC)
-- Tela de cadastro no front (hoje o registro é só via API)
-- Painel administrativo (gerenciar salas e ver todas as reservas)
-- Dashboard de ocupação (sala mais usada, horários de pico)
-- Destacar em vermelho no SVG as salas já ocupadas na data escolhida
-- Sugestão automática de sala alternativa quando há conflito
+
+- Painel administrativo (cadastrar/editar/desativar salas, ver todas as reservas de todos os usuários)
+- Dashboard de ocupação (sala mais reservada, horários de pico)
+- Animações/transições adicionais na interface (RF09)
+- Completar a identificação da Biblioteca no modelo 3D (falta mapear no `MAPEAMENTO_MANUAL_SALAS`)

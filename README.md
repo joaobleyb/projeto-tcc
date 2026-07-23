@@ -1,4 +1,4 @@
-# Sistema de Agendamento de Salas — IFRS Campus Rolante
+# Sistema de Agendamento de Salas Com Iteratividade 3D — IFRS Campus Rolante
 
 Trabalho de Conclusão de Curso (ADS — IFRS Campus Rolante): sistema web de agendamento de
 salas com **planta 3D interativa** do prédio, onde o usuário navega pelo modelo, clica na

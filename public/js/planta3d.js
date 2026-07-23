@@ -14,6 +14,7 @@ let salaSelecionadaNaCena = null; // última sala focada (usado pelo botão de c
 let todosOsComodos = [];     // todas as malhas de piso do modelo, usado no modo identificar (clique direto)
 let raycaster3d, mouse3d;
 let andarAtual = 'terreo';   // andar selecionado: só as bolinhas desse andar aparecem
+let objetoRaiz = null;       // grupo raiz do modelo carregado (pra poder mostrar/esconder por andar)
 
 // O Sweet Home 3D não exporta o nome que a gente dá ao cômodo — os grupos do OBJ saem com
 // nomes automáticos tipo "room_75_401". Por isso mapeamos esses nomes manualmente aqui.
@@ -116,9 +117,13 @@ function carregarModelo3D() {
     objLoader.setPath('/modelo3d/');
     objLoader.load('IFRSCERTO.obj', (objeto) => {
       cena3d.add(objeto);
+      objetoRaiz = objeto;
       // removerGrama(objeto); // desativado: os nomes dos cômodos mudaram depois do reexport da porta,
       // a lista antiga estava escondendo salas de verdade. Reidentificar a grama depois.
       mapearSalasNoModelo(objeto);
+      classificarAndares(objeto);
+      corrigirAndarDasSalasMapeadas(objeto); // usa o andar do banco pras salas já identificadas
+      aplicarVisibilidadeAndar(andarAtual);
       criarMarcadoresDeSala();
       coletarPortas(objeto);
       modeloCarregado = true;
@@ -161,8 +166,13 @@ function aoClicarNaCena3D(evento) {
   mouse3d.x = ((evento.clientX - retangulo.left) / retangulo.width) * 2 - 1;
   mouse3d.y = -((evento.clientY - retangulo.top) / retangulo.height) * 2 + 1;
 
+  // só considera cômodos realmente visíveis no momento (o raycaster do Three.js não ignora objetos escondidos)
+  const comodosVisiveis = todosOsComodos.filter((malha) =>
+    andarAtual === 'superior' ? true : malha.userData.andar === 'terreo'
+  );
+
   raycaster3d.setFromCamera(mouse3d, camera3d);
-  const intersecoes = raycaster3d.intersectObjects(todosOsComodos);
+  const intersecoes = raycaster3d.intersectObjects(comodosVisiveis);
   if (intersecoes.length === 0) return;
 
   const malha = intersecoes[0].object;
@@ -226,11 +236,71 @@ function atualizarMarcadoresDeSala() {
   atualizarSetasDeNavegacao(container);
 }
 
+// Classifica cada objeto de nível mais alto do modelo (paredes, teto, móveis...) em "terreo" ou
+// "superior", com base na altura (eixo Y) dele. Estratégia: usamos a altura da BASE das salas
+// que já sabemos que são do superior (MAPEAMENTO_MANUAL_SALAS + andar cadastrado no banco) como
+// referência real — mais confiável que tentar adivinhar "saltos" de altura entre objetos não identificados.
+function classificarAndares(objeto) {
+  const dados = objeto.children.map((grupo) => {
+    const caixa = new THREE.Box3().setFromObject(grupo);
+    return { grupo, yBase: caixa.min.y, yCentro: caixa.getCenter(new THREE.Vector3()).y };
+  });
+
+  const nomesConhecidosSuperior = Object.entries(MAPEAMENTO_MANUAL_SALAS)
+    .filter(([, svgId]) => salasPorSvgId[svgId] && salasPorSvgId[svgId].andar === 'superior')
+    .map(([nomeCru]) => nomeCru);
+
+  const gruposConhecidosSuperior = dados.filter((d) => nomesConhecidosSuperior.includes(d.grupo.name));
+
+  let alturaDeCorte;
+  if (gruposConhecidosSuperior.length > 0) {
+    // a base mais baixa entre as salas conhecidas do superior vira a linha de corte (com margem)
+    alturaDeCorte = Math.min(...gruposConhecidosSuperior.map((d) => d.yBase)) - 10;
+  } else {
+    // reserva: se ainda não temos nenhuma sala identificada, divide pela metade da altura total
+    const alturas = dados.map((d) => d.yCentro);
+    alturaDeCorte = (Math.min(...alturas) + Math.max(...alturas)) / 2;
+  }
+
+  dados.forEach(({ grupo, yCentro }) => {
+    const andar = yCentro >= alturaDeCorte ? 'superior' : 'terreo';
+    grupo.userData.andar = andar;
+    // propaga pros filhos — o Three.js não ignora objetos invisíveis ao fazer raycasting
+    grupo.traverse((filho) => { filho.userData.andar = andar; });
+  });
+}
+
+// A separação por altura é só uma aproximação — para as salas que já identificamos manualmente,
+// usamos o andar cadastrado no banco (fonte confiável) e sobrescrevemos o grupo inteiro daquele cômodo
+function corrigirAndarDasSalasMapeadas(objeto) {
+  Object.entries(malhasPorSvgId).forEach(([svgId, malha]) => {
+    const sala = salasPorSvgId[svgId];
+    if (!sala || !sala.andar) return;
+
+    // sobe na hierarquia até achar o grupo de nível mais alto (filho direto da raiz do modelo)
+    let grupo = malha;
+    while (grupo.parent && grupo.parent !== objeto) grupo = grupo.parent;
+
+    grupo.userData.andar = sala.andar;
+    grupo.traverse((filho) => { filho.userData.andar = sala.andar; });
+  });
+}
+
+// Mostra os objetos do andar escolhido. No térreo, mostra só o térreo (esconde o superior
+// inteiro, incluindo o teto/laje de cima); no superior, mostra o prédio inteiro (os dois juntos).
+function aplicarVisibilidadeAndar(andar) {
+  if (!objetoRaiz) return;
+  objetoRaiz.children.forEach((grupo) => {
+    grupo.visible = andar === 'superior' ? true : grupo.userData.andar === 'terreo';
+  });
+}
+
 // Troca o andar exibido e move a câmera pra vista padrão daquele andar (RF10)
 function trocarAndar(andar) {
   andarAtual = andar;
   salaSelecionadaNaCena = null; // esconde as setas de navegação
   atualizarAlcaDoSlider(andar);
+  aplicarVisibilidadeAndar(andar);
 
   const vista = VISAO_POR_ANDAR[andar];
   if (modeloCarregado) animarCamera(vista.alvo.clone(), vista.posicao.clone(), 600);
@@ -477,11 +547,12 @@ function selecionarSalaComFoco(sala, abrirJanela = true) {
   selecionarSala(sala, abrirJanela);
 }
 
-// Só troca o filtro de andar e atualiza a alça do slider — sem reposicionar a câmera
-// (usado quando a troca vem de navegar pra uma sala, não de arrastar o slider)
+// Só troca o filtro de andar, a alça do slider e a visibilidade da geometria — sem reposicionar
+// a câmera (usado quando a troca vem de navegar pra uma sala, não de arrastar o slider)
 function trocarAndarSemMoverCamera(andar) {
   andarAtual = andar;
   atualizarAlcaDoSlider(andar);
+  aplicarVisibilidadeAndar(andar);
 }
 
 // Pinta uma sala de vermelho (ocupada) ou verde (livre) — usado pelo RF04 (a bolinha também muda de cor)
